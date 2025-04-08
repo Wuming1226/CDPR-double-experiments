@@ -12,14 +12,9 @@ from jacobian import get_jacobian
 
 folder = '../data/beta/'
 file_order = ''
-pos_ref_save_path = folder + 'pos_ref' + file_order + '.txt'
-pos_save_path = folder + 'pos' + file_order + '.txt'
-# orient_ref_save_path = folder + 'orient_ref' + file_order + '.txt'
-# orient_save_path = folder + 'orient' + file_order + '.txt'
-cable_length_save_path = folder + 'cable_length' + file_order + '.txt'
-length_controller_save_path = folder + 'length_controller' + file_order + '.txt'
-velocity_controller_task_save_path = folder + 'velocity_controller_task' + file_order + '.txt'
-velocity_controller_joint_save_path = folder + 'velocity_controller_joint' + file_order + '.txt'
+pose_ref_save_path = folder + 'pose_ref' + file_order + '.txt'
+pose_save_path = folder + 'pose' + file_order + '.txt'
+# cable_length_save_path = folder + 'cable_length' + file_order + '.txt'
 motor_velo_save_path = folder + 'motor_velo_' + file_order + '.txt'
 
 
@@ -32,17 +27,14 @@ if __name__ == "__main__":
 
     x_r_list, y_r_list, z_r_list = [], [], []
     x_list, y_list, z_list = [], [], []
-    cl1_list, cl2_list, cl3_list, cl4_list = [], [], [], []
-    pos_list = np.empty((0, 3))
-    pos_ref_list = np.empty((0, 3))
-    cable_length_ref_list = np.empty((0, 4))
-    cable_length_list = np.empty((0, 4))
-    length_controller_list = np.empty((0, 4))
-    velocity_controller_task_list = np.empty((0, 3))
-    velocity_controller_joint_list = np.empty((0, 4))
+    # cl1_list, cl2_list, cl3_list, cl4_list = [], [], [], []
+    pose_list = np.empty((0, 4))
+    pose_ref_list = np.empty((0, 4))
+    # cable_length_ref_list = np.empty((0, 4))
+    # cable_length_list = np.empty((0, 4))
     motor_velo_list = np.empty((0, 4))
 
-    traject = np.loadtxt("trajectory+.txt")
+    traject = np.loadtxt("trajectory_planned.txt")
 
     tighten_flag = True
 
@@ -65,60 +57,43 @@ if __name__ == "__main__":
         start_time = time.time()
 
         # 参考数值
-        pos_ref = traject[cnt, :3]
-        print('pos_ref: {}'.format(pos_ref))
-
-        orient_ref = traject[cnt, 3:]
-        print('orient_ref: {}'.format(orient_ref))
+        pose_ref = np.append(traject[cnt, :3], 0).reshape(-1, 1)
+        print('pose_ref: {}'.format(pose_ref))
 
         if cnt == len(traject) - 1:     # 防溢出
-            pos_ref_next = traject[cnt]
-            orient_ref_next = traject[cnt]
+            pose_ref_next = np.append(traject[cnt], 0).reshape(-1, 1)
         else:
-            pos_ref_next = traject[cnt+1]
-            orient_ref_next = traject[cnt+1]
-        print('pos_ref_next: {}'.format(pos_ref_next))
-        print('orient_ref_next: {}'.format(orient_ref_next))
+            pose_ref_next = np.append(traject[cnt + 1], 0).reshape(-1, 1)
+        print('pose_ref_next: {}'.format(pose_ref_next))
 
         cnt += 1
 
         # 实际数值
         x, y, z, orient = cdpr.get_moving_platform_pose()
-        pos = np.array([x, y, z])
-        print('pos: {}'.format(pos))
-        print('orient: {}'.format(orient))
-        cable_length = cdpr.get_cable_length()
-        print('cable length: {}'.format(cable_length))
+        phi = R.from_quat(orient).as_euler('zyx', degrees=False)
+        pose = np.array([x, y, z, phi])
+        print('pose: {}'.format(pose))
+        # cable_length = cdpr.get_cable_length()
+        # print('cable length: {}'.format(cable_length))
 
-        # 位置误差
-        pos_err = pos_ref - pos
-        print('pos err: {}'.format(pos_err))
+        # 位姿误差
+        pose_err = pose_ref - pose
+        print('pose err: {}'.format(pose_err))
 
-        # 姿态误差
-        orient_err = (R.from_quat(orient_ref) * R.from_quat(orient).inv()).as_rotvec()
-        print('orient err: {}'.format(orient_err))
-
-        # 控制器
-        eps = 0.002
-        k = 1.5
-        velo_task = (pos_ref_next - pos_ref) / T + eps * np.sign(pos_err) + k * pos_err  # control law
+        # 滑模控制器
+        eps = np.diag(np.array([0.002, 0.002, 0.002, 0.002]))
+        k = np.diag(np.array([1.5, 1.5, 1.5, 1.5]))
+        velo_task = (pose_ref_next - pose_ref) / T + eps @ np.sign(pose_err) + k @ pose_err  # control law
         print('velo_task: {}'.format(velo_task))
 
-        eps = 0.002
-        k = 1.5
-        ang_velo_task = ((R.from_quat(orient_ref_next).as_rotvec() - R.from_quat(pos_ref).as_rotvec()) / T +
-                         eps * np.sign(orient_err) + k * orient_err)    # control law
-        print('ang_velo_task: {}'.format(ang_velo_task))
-
         # 逆运动学
-        J = get_jacobian(cdpr.a_matrix, cdpr.b_matrix, pos, orient)
-        velo_joint = np.matmul(J, velo_task.reshape(3, 1))
-        # velo_joint = np.matmul(J, np.vstack([velo_task.reshape(3, 1), ang_velo_task.reshape(3, 1)]))
+        J = get_jacobian(cdpr.a_matrix, cdpr.b_matrix, pose[0:3], orient)
+        velo_joint = J @ velo_task
         velo_joint = velo_joint.reshape(4, )
         print('veloJoint: {}'.format(velo_joint))
 
         # convert linear velocities to velocities of motors
-        velo_motor = velo_joint * 60 * 10 / (0.03*math.pi)      # 10 is the gear ratio, 0.03 is diameter of the coil
+        velo_motor = velo_joint / (0.04*math.pi)      # 0.04 is diameter of the coil
 
         # set cable velocity in joint space
         velo_limit = 3
@@ -137,26 +112,22 @@ if __name__ == "__main__":
         y_list.append(pos[1])
         z_list.append(pos[2])
 
-        cl1_list.append(cable_length[0])
-        cl2_list.append(cable_length[1])
-        cl3_list.append(cable_length[2])
-        cl4_list.append(cable_length[3])
+        # cl1_list.append(cable_length[0])
+        # cl2_list.append(cable_length[1])
+        # cl3_list.append(cable_length[2])
+        # cl4_list.append(cable_length[3])
 
         # data 
-        pos_list = np.row_stack((pos_list, pos))
-        pos_ref_list = np.row_stack((pos_ref_list, pos_ref))
-        cable_length_list = np.row_stack((cable_length_list, cable_length))
+        pose_list = np.row_stack((pose_list, pose))
+        pose_ref_list = np.row_stack((pose_ref_list, pose_ref))
+        # cable_length_list = np.row_stack((cable_length_list, cable_length))
         # length_controller_list = np.row_stack((length_controller_list, veloJoint1))
-        # velocity_controller_task_list = np.row_stack((velocity_controller_task_list, veloTask))
-        # velocity_controller_joint_list = np.row_stack((velocity_controller_joint_list, veloJoint2))
         motor_velo_list = np.row_stack((motor_velo_list, velo_motor))
 
-        np.savetxt(pos_ref_save_path, pos_ref_list)
-        np.savetxt(pos_save_path, pos_list)
-        np.savetxt(cable_length_save_path, cable_length_list)
+        np.savetxt(pose_ref_save_path, pose_ref_list)
+        np.savetxt(pose_save_path, pose_list)
+        # np.savetxt(cable_length_save_path, cable_length_list)
         # np.savetxt(length_controller_save_path, length_controller_list)
-        # np.savetxt(velocity_controller_task_save_path, velocity_controller_task_list)
-        np.savetxt(velocity_controller_joint_save_path, velocity_controller_joint_list)
         np.savetxt(motor_velo_save_path, motor_velo_list)
         print('data saved.')
 
@@ -181,10 +152,10 @@ if __name__ == "__main__":
     x_plot = fig.add_subplot(4, 2, 1)
     y_plot = fig.add_subplot(4, 2, 3)
     z_plot = fig.add_subplot(4, 2, 5)
-    c1_plot = fig.add_subplot(4, 2, 2)
-    c2_plot = fig.add_subplot(4, 2, 4)
-    c3_plot = fig.add_subplot(4, 2, 6)
-    c4_plot = fig.add_subplot(4, 2, 8)
+    # c1_plot = fig.add_subplot(4, 2, 2)
+    # c2_plot = fig.add_subplot(4, 2, 4)
+    # c3_plot = fig.add_subplot(4, 2, 6)
+    # c4_plot = fig.add_subplot(4, 2, 8)
 
     x_plot.plot(x_r_list)
     x_plot.plot(x_list)
@@ -193,10 +164,10 @@ if __name__ == "__main__":
     z_plot.plot(z_r_list)
     z_plot.plot(z_list)
 
-    c1_plot.plot(cl1_list)
-    c2_plot.plot(cl2_list)
-    c3_plot.plot(cl3_list)
-    c4_plot.plot(cl4_list)
+    # c1_plot.plot(cl1_list)
+    # c2_plot.plot(cl2_list)
+    # c3_plot.plot(cl3_list)
+    # c4_plot.plot(cl4_list)
 
     x_plot.set_ylabel('x')
     y_plot.set_ylabel('y')
@@ -206,12 +177,9 @@ if __name__ == "__main__":
     plt.show()
 
     # save trajectory datas
-    np.savetxt(pos_ref_save_path, pos_ref_list)
-    np.savetxt(pos_save_path, pos_list)
-    np.savetxt(cable_length_save_path, cable_length_list)
-    # np.savetxt(length_controller_save_path, length_controller_list)
-    # np.savetxt(velocity_controller_task_save_path, velocity_controller_task_list)
-    np.savetxt(velocity_controller_joint_save_path, velocity_controller_joint_list)
+    np.savetxt(pose_ref_save_path, pose_ref_list)
+    np.savetxt(pose_save_path, pose_list)
+    # np.savetxt(cable_length_save_path, cable_length_list)
     np.savetxt(motor_velo_save_path, motor_velo_list)
     print('data saved.')
 
