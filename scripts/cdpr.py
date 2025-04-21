@@ -19,21 +19,23 @@ class CDPR:
         rospy.init_node('cdpr_control', anonymous=True)
 
         # subscriber and publisher
-        self._moving_platform_pose = PoseStamped()
-        rospy.Subscriber('/vrpn_client_node/end_effector/pose', PoseStamped, self._pose_callback, queue_size=1)
+        self._moving_platform_pose = PoseStamped()      # 末端在基座坐标系的位姿
+        rospy.Subscriber('/vrpn_client_node/end/pose', PoseStamped, self._pose_callback, queue_size=1)
+        self._base_frame_pose = PoseStamped()       # 基座坐标系在世界坐标系的位姿
+        rospy.Subscriber('/vrpn_client_node/frame/pose', PoseStamped, self._frame_callback, queue_size=1)
 
         self._motor_pos = np.array([0, 0, 0, 0])
         rospy.Subscriber('motor_pos', Int64MultiArray, self._motor_pos_callback, queue_size=1)
 
         self._veloPub = rospy.Publisher('motor_velo', Int16MultiArray, queue_size=10)
 
-        # origin point offset (coordinates in world frame)
-        self.x_off = 0.0
-        self.y_off = 0.0
-        self.z_off = 0.0
-        self.pos_off = np.array([self.x_off, self.y_off, self.z_off])
+        # 坐标系marker点在基座坐标下的位置偏移
+        self.x_offset = -1.0
+        self.y_offset = -1.0
+        self.z_offset = 0.0
+        self.pos_off = np.array([self.x_offset, self.y_offset, self.z_offset])
 
-        # anchor positions in the world frame
+        # anchor positions in the base frame
         self._anchorA1 = np.array([0.342, 0.342, 0.727])
         self._anchorA2 = np.array([-0.342, 0.342, 0.727])
         self._anchorA3 = np.array([-0.342, -0.342, 0.727])
@@ -74,14 +76,30 @@ class CDPR:
             pass
         else:
             # pose
-            self._moving_platform_pose.pose.position.x = data.pose.position.x / 1000 - self.pos_off[0]
-            self._moving_platform_pose.pose.position.y = data.pose.position.y / 1000 - self.pos_off[1]
-            self._moving_platform_pose.pose.position.z = data.pose.position.z / 1000 - self.pos_off[2]
-            self._moving_platform_pose.pose.orientation = data.pose.orientation
-
+            self._moving_platform_pose.pose.position.x = data.pose.position.x / 1000 - self._base_frame_pose.pose.position.x
+            self._moving_platform_pose.pose.position.y = data.pose.position.y / 1000 - self._base_frame_pose.pose.position.y
+            self._moving_platform_pose.pose.position.z = data.pose.position.z / 1000 - self._base_frame_pose.pose.position.z
+            self._moving_platform_pose.pose.orientation = (R.from_quat(self._base_frame_pose.pose.orientation).inv() * R.from_quat(data.pose.orientation)).as_quat()
             # header
             self._moving_platform_pose.header.frame_id = data.header.frame_id
             self._moving_platform_pose.header.stamp = data.header.stamp
+
+    # 基座坐标姿态回调函数
+    def _frame_callback(self, data):
+        # if motion data is lost(999999), do not update
+        if (np.abs(data.pose.position.x) > 2000 or np.abs(data.pose.position.y) > 2000
+                or np.abs(data.pose.position.z) > 2000):
+            pass
+        else:
+            # pose
+            self._base_frame_pose.pose.position.x = data.pose.position.x / 1000 - self.x_offset
+            self._base_frame_pose.pose.position.y = data.pose.position.y / 1000 - self.y_offset
+            self._base_frame_pose.pose.position.z = data.pose.position.z / 1000 - self.z_offset
+            self._base_frame_pose.pose.orientation = data.pose.orientation
+
+            # header
+            self._base_frame_pose.header.frame_id = data.header.frame_id
+            self._base_frame_pose.header.stamp = data.header.stamp
 
     def _motor_pos_callback(self, data):
         self._motor_pos = np.array(data.data)
@@ -177,9 +195,7 @@ class CDPR:
 if __name__ == "__main__":
 
     cdpr = CDPR()
-    rate = rospy.Rate(10)
-    # cdpr.pretighten()
-    time.sleep(3)
+    rate = rospy.Rate(20)
     # cdpr.pretighten(True, True, True, True)
     cdpr.init_cable_length(True, True, True, True)
     time.sleep(1)

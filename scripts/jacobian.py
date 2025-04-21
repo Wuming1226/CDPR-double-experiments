@@ -1,6 +1,5 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-import math
 
 
 def get_jacobian(a_matrix, b_matrix, position, orientation):

@@ -56,8 +56,8 @@ if __name__ == "__main__":
 
         start_time = time.time()
 
-        # 参考数值
-        pose_ref = np.append(traject[cnt, :3], 0).reshape(-1, 1)
+        # 参考数值（所有数据均在基座坐标系下）
+        pose_ref = np.append(traject[cnt], 0).reshape(-1, 1)
         print('pose_ref: {}'.format(pose_ref))
 
         if cnt == len(traject) - 1:     # 防溢出
@@ -70,7 +70,7 @@ if __name__ == "__main__":
 
         # 实际数值
         x, y, z, orient = cdpr.get_moving_platform_pose()
-        phi = R.from_quat(orient).as_euler('zyx', degrees=False)
+        phi = R.from_quat(orient).as_euler('zyx', degrees=False)[0]
         pose = np.array([x, y, z, phi])
         print('pose: {}'.format(pose))
         # cable_length = cdpr.get_cable_length()
@@ -96,7 +96,7 @@ if __name__ == "__main__":
         velo_motor = velo_joint / (0.04*math.pi)      # 0.04 is diameter of the coil
 
         # set cable velocity in joint space
-        velo_limit = 3
+        velo_limit = 3.5
         for i, vel in enumerate(velo_motor):
             if np.abs(vel) > velo_limit:      # velocity limit
                 velo_motor[i] = velo_limit * np.sign(vel)
@@ -104,13 +104,13 @@ if __name__ == "__main__":
         cdpr.set_motor_velo(int(velo_motor[0]), int(velo_motor[1]), int(velo_motor[2]), int(velo_motor[3]))
         print('motor velo: {}, {}, {}, {}'.format(velo_motor[0], velo_motor[1], velo_motor[2], velo_motor[3]))
 
-        x_r_list.append(pos_ref[0])
-        y_r_list.append(pos_ref[1])
-        z_r_list.append(pos_ref[2])
+        x_r_list.append(pose_ref[0])
+        y_r_list.append(pose_ref[1])
+        z_r_list.append(pose_ref[2])
 
-        x_list.append(pos[0])
-        y_list.append(pos[1])
-        z_list.append(pos[2])
+        x_list.append(pose[0])
+        y_list.append(pose[1])
+        z_list.append(pose[2])
 
         # cl1_list.append(cable_length[0])
         # cl2_list.append(cable_length[1])
@@ -118,11 +118,11 @@ if __name__ == "__main__":
         # cl4_list.append(cable_length[3])
 
         # data 
-        pose_list = np.row_stack((pose_list, pose))
-        pose_ref_list = np.row_stack((pose_ref_list, pose_ref))
+        pose_list = np.vstack((pose_list, pose))
+        pose_ref_list = np.vstack((pose_ref_list, pose_ref))
         # cable_length_list = np.row_stack((cable_length_list, cable_length))
         # length_controller_list = np.row_stack((length_controller_list, veloJoint1))
-        motor_velo_list = np.row_stack((motor_velo_list, velo_motor))
+        motor_velo_list = np.vstack((motor_velo_list, velo_motor))
 
         np.savetxt(pose_ref_save_path, pose_ref_list)
         np.savetxt(pose_save_path, pose_list)
