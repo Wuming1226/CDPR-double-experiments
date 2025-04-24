@@ -7,7 +7,7 @@ import copy
 from scipy.spatial.transform import Rotation as R
 
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from std_msgs.msg import Int16MultiArray, Int64MultiArray
+from std_msgs.msg import Float32MultiArray
 
 from jacobian import get_jacobian
 
@@ -19,37 +19,37 @@ class CDPR:
         rospy.init_node('cdpr_control', anonymous=True)
 
         # subscriber and publisher
-        self._moving_platform_pose = PoseStamped()      # 末端在基座坐标系的位姿
+        self._moving_platform_pose = PoseStamped()  # 末端在基座坐标系的位姿
         rospy.Subscriber('/vrpn_client_node/end/pose', PoseStamped, self._pose_callback, queue_size=1)
-        self._base_frame_pose = PoseStamped()       # 基座坐标系在世界坐标系的位姿
+        self._base_frame_pose = PoseStamped()  # 基座坐标系在世界坐标系的位姿
         rospy.Subscriber('/vrpn_client_node/frame/pose', PoseStamped, self._frame_callback, queue_size=1)
 
         self._motor_pos = np.array([0, 0, 0, 0])
-        rospy.Subscriber('motor_pos', Int64MultiArray, self._motor_pos_callback, queue_size=1)
+        rospy.Subscriber('motor_pos', Float32MultiArray, self._motor_pos_callback, queue_size=1)
 
-        self._veloPub = rospy.Publisher('motor_velo', Int16MultiArray, queue_size=10)
+        self._veloPub = rospy.Publisher('motor_velo', Float32MultiArray, queue_size=10)
 
         # 坐标系marker点在基座坐标下的位置偏移
-        self.x_offset = -1.0
-        self.y_offset = -1.0
-        self.z_offset = 0.0
+        self.x_offset = -1.000
+        self.y_offset = -1.000
+        self.z_offset = 1.591
         self.pos_off = np.array([self.x_offset, self.y_offset, self.z_offset])
 
         # anchor positions in the base frame
-        self._anchorA1 = np.array([0.342, 0.342, 0.727])
-        self._anchorA2 = np.array([-0.342, 0.342, 0.727])
-        self._anchorA3 = np.array([-0.342, -0.342, 0.727])
-        self._anchorA4 = np.array([0.342, -0.342, 0.727])
+        self._anchorA1 = np.array([-0.970, -1.000, 1.494])
+        self._anchorA2 = np.array([0.970, -1.000, 1.494])
+        self._anchorA3 = np.array([0.970, 1.000, 1.494])
+        self._anchorA4 = np.array([-0.970, 1.000, 1.494])
         self.a_matrix = np.vstack([self._anchorA1, self._anchorA2, self._anchorA3, self._anchorA4])
 
-        self._anchorB1 = np.array([0.000, 0.000, 0.000])
-        self._anchorB2 = np.array([0.000, 0.000, 0.000])
-        self._anchorB3 = np.array([0.000, 0.000, 0.000])
-        self._anchorB4 = np.array([0.000, 0.000, 0.000])
+        self._anchorB1 = np.array([-0.086, -0.119, 0.050])
+        self._anchorB2 = np.array([0.086, -0.119, 0.050])
+        self._anchorB3 = np.array([0.086, 0.119, 0.050])
+        self._anchorB4 = np.array([-0.086, 0.119, 0.050])
         self.b_matrix = np.vstack([self._anchorB1, self._anchorB2, self._anchorB3, self._anchorB4])
 
         # initial cable lengths and motor positions
-        self._ori_cable_lengths = np.array([0., 0., 0., 0.])     # 初始化的类型必须是浮点！！！
+        self._ori_cable_lengths = np.array([0., 0., 0., 0.])  # 初始化的类型必须是浮点！！！
 
     def init_cable_length(self, cable1_flag, cable2_flag, cable3_flag, cable4_flag):
         # calculate origin cable lengths
@@ -74,12 +74,23 @@ class CDPR:
         if (np.abs(data.pose.position.x) > 2000 or np.abs(data.pose.position.y) > 2000
                 or np.abs(data.pose.position.z) > 2000):
             pass
+        elif self._base_frame_pose.pose.orientation.w == 0:  # 等待 frame_pose 先初始化
+            pass
         else:
             # pose
-            self._moving_platform_pose.pose.position.x = data.pose.position.x / 1000 - self._base_frame_pose.pose.position.x
-            self._moving_platform_pose.pose.position.y = data.pose.position.y / 1000 - self._base_frame_pose.pose.position.y
-            self._moving_platform_pose.pose.position.z = data.pose.position.z / 1000 - self._base_frame_pose.pose.position.z
-            self._moving_platform_pose.pose.orientation = (R.from_quat(self._base_frame_pose.pose.orientation).inv() * R.from_quat(data.pose.orientation)).as_quat()
+            self._moving_platform_pose.pose.position.x = data.pose.position.x - self._base_frame_pose.pose.position.x
+            self._moving_platform_pose.pose.position.y = data.pose.position.y - self._base_frame_pose.pose.position.y
+            self._moving_platform_pose.pose.position.z = data.pose.position.z - self._base_frame_pose.pose.position.z
+            quat = (R.from_quat(
+                [self._base_frame_pose.pose.orientation.x, self._base_frame_pose.pose.orientation.y,
+                 self._base_frame_pose.pose.orientation.z,
+                 self._base_frame_pose.pose.orientation.w]).inv() * R.from_quat(
+                [data.pose.orientation.x, data.pose.orientation.y, data.pose.orientation.z,
+                 data.pose.orientation.w])).as_quat()
+            self._moving_platform_pose.pose.orientation.x = quat[0]
+            self._moving_platform_pose.pose.orientation.y = quat[1]
+            self._moving_platform_pose.pose.orientation.z = quat[2]
+            self._moving_platform_pose.pose.orientation.w = quat[3]
             # header
             self._moving_platform_pose.header.frame_id = data.header.frame_id
             self._moving_platform_pose.header.stamp = data.header.stamp
@@ -92,9 +103,9 @@ class CDPR:
             pass
         else:
             # pose
-            self._base_frame_pose.pose.position.x = data.pose.position.x / 1000 - self.x_offset
-            self._base_frame_pose.pose.position.y = data.pose.position.y / 1000 - self.y_offset
-            self._base_frame_pose.pose.position.z = data.pose.position.z / 1000 - self.z_offset
+            self._base_frame_pose.pose.position.x = data.pose.position.x - self.x_offset
+            self._base_frame_pose.pose.position.y = data.pose.position.y - self.y_offset
+            self._base_frame_pose.pose.position.z = data.pose.position.z - self.z_offset
             self._base_frame_pose.pose.orientation = data.pose.orientation
 
             # header
@@ -105,7 +116,7 @@ class CDPR:
         self._motor_pos = np.array(data.data)
 
     def set_motor_velo(self, motor1_velo, motor2_velo, motor3_velo, motor4_velo):
-        motor_velo = Int16MultiArray(data=np.array([motor1_velo, motor2_velo, motor3_velo, motor4_velo]))
+        motor_velo = Float32MultiArray(data=np.array([motor1_velo, motor2_velo, motor3_velo, motor4_velo]))
         self._veloPub.publish(motor_velo)
 
     def get_moving_platform_pose(self):
@@ -197,14 +208,18 @@ if __name__ == "__main__":
     cdpr = CDPR()
     rate = rospy.Rate(20)
     # cdpr.pretighten(True, True, True, True)
-    cdpr.init_cable_length(True, True, True, True)
+    # cdpr.init_cable_length(True, True, True, True)
     time.sleep(1)
-    cdpr.set_motor_velo(0, 0, 0, 0)
+    cdpr.set_motor_velo(0.1, 0.1, 0.1, 0.1)
     start_time = time.time()
-    while time.time() - start_time < 5:
-        # cdpr.set_motor_velo(0, 100, 0, 0)
-        # print(cdpr.get_moving_platform_pose())
-        print(cdpr.get_cable_length())
+    while time.time() - start_time < 2:
+        cdpr.set_motor_velo(0.1, 0.1, 0.1, 0.1)
+        print(cdpr._moving_platform_pose.pose)
+        time.sleep(0.05)
+    cdpr.set_motor_velo(-0.1, -0.1, -0.1, -0.1)
+    start_time = time.time()
+    while time.time() - start_time < 2:
+        cdpr.set_motor_velo(-0.1, -0.1, -0.1, -0.1)
+        print(cdpr._moving_platform_pose.pose)
         time.sleep(0.05)
     cdpr.set_motor_velo(0, 0, 0, 0)
-
